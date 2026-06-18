@@ -76,12 +76,18 @@ export default function List() {
     }
   }, [sortField, sortOrder, filters]);
 
-  useEffect(() => {
-    // Timeout to prevent infinite loading
-    const timeout = setTimeout(() => {
-      if (loading) {
-        console.log('List yukleme timeout');
-        setLoading(false);
+ useEffect(() => {
+  const timeout = setTimeout(() => {
+    console.log('List yukleme timeout');
+    setLoading(false);
+  }, 5000);
+
+  fetchKapaklar().finally(() => {
+    clearTimeout(timeout);
+  });
+
+  return () => clearTimeout(timeout);
+}, [fetchKapaklar]);
       }
     }, 5000);
 
