@@ -76,7 +76,7 @@ export default function List() {
     }
   }, [sortField, sortOrder, filters]);
 
- useEffect(() => {
+useEffect(() => {
   const timeout = setTimeout(() => {
     console.log('List yukleme timeout');
     setLoading(false);
@@ -88,14 +88,6 @@ export default function List() {
 
   return () => clearTimeout(timeout);
 }, [fetchKapaklar]);
-      }
-    }, 5000);
-
-    fetchKapaklar().then(() => clearTimeout(timeout));
-
-    return () => clearTimeout(timeout);
-  }, [fetchKapaklar, loading]);
-
   const handleDelete = async (id: string) => {
     try {
       await supabase.from('kapaklar').delete().eq('id', id);
