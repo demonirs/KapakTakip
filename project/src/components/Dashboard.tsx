@@ -83,13 +83,24 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    if (user) {
-      setLoading(true);
-      // Timeout to prevent infinite loading
-      const timeout = setTimeout(() => {
-        if (loading) {
-          console.log('Dashboard yukleme timeout');
-          setLoading(false);
+  if (!user) {
+    setLoading(false);
+    return;
+  }
+
+  setLoading(true);
+
+  const timeout = setTimeout(() => {
+    console.log('Dashboard yukleme timeout');
+    setLoading(false);
+  }, 5000);
+
+  fetchData().finally(() => {
+    clearTimeout(timeout);
+  });
+
+  return () => clearTimeout(timeout);
+}, [user, fetchData]);
         }
       }, 5000);
 
