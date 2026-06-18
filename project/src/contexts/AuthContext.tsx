@@ -1,184 +1,193 @@
-import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from 'react';
-import { User, Session } from '@supabase/supabase-js';
-import { supabase, Profile } from '../lib/supabase';
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { supabase } from '../lib/supabase';
+import type { User, Session } from '@supabase/supabase-js';
+
+interface Profile {
+  id: string;
+  full_name: string;
+  created_at?: string;
+}
 
 interface AuthContextType {
   user: User | null;
   session: Session | null;
   profile: Profile | null;
   loading: boolean;
-  error: string | null;
-  signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
-  signUp: (email: string, password: string, fullName: string) => Promise<{ error: Error | null }>;
+  signIn: (email: string, password: string) => Promise<{ error: any }>;
+  signUp: (email: string, password: string, fullName?: string) => Promise<{ error: any }>;
   signOut: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const MAX_LOADING_TIME = 4000; // 4 seconds max
+const LOAD_TIMEOUT = 4000;
 
-export function AuthProvider({ children }: { children: ReactNode }) {
+export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
-  const fetchProfile = useCallback(async (userId: string) => {
+  const loadProfile = async (currentUser: User | null) => {
+    if (!currentUser) {
+      setProfile(null);
+      return;
+    }
+
+    const fallbackName =
+      currentUser.email?.split('@')[0] ||
+      currentUser.user_metadata?.full_name ||
+      'Kullanıcı';
+
     try {
-      const { data, error: profileError } = await supabase
+      const { data, error } = await supabase
         .from('profiles')
         .select('*')
-        .eq('id', userId)
-        .single();
+        .eq('id', currentUser.id)
+        .maybeSingle();
 
-      if (profileError) {
-        console.log('Profil yuklenemedi:', profileError.message);
-      } else {
-        setProfile(data);
+      if (error) {
+        console.log('Profil yüklenemedi:', error.message);
+        setProfile({
+          id: currentUser.id,
+          full_name: fallbackName,
+        });
+        return;
       }
+
+      if (!data) {
+        const { data: inserted } = await supabase
+          .from('profiles')
+          .insert({
+            id: currentUser.id,
+            full_name: fallbackName,
+          })
+          .select()
+          .maybeSingle();
+
+        setProfile(
+          inserted || {
+            id: currentUser.id,
+            full_name: fallbackName,
+          }
+        );
+        return;
+      }
+
+      setProfile(data);
     } catch (err) {
-      console.log('Profil yukleme hatasi:', err);
+      console.log('Profil yükleme hatası:', err);
+      setProfile({
+        id: currentUser.id,
+        full_name: fallbackName,
+      });
     }
-  }, []);
+  };
 
   useEffect(() => {
     let mounted = true;
-    let loadingTimeout: ReturnType<typeof setTimeout>;
 
-    const initAuth = async () => {
+    const init = async () => {
+      const timeout = setTimeout(() => {
+        if (mounted) setLoading(false);
+      }, LOAD_TIMEOUT);
+
       try {
-        console.log('Supabase baslatiliyor...');
+        const { data } = await supabase.auth.getSession();
+        if (!mounted) return;
 
-        // Start timeout
-        loadingTimeout = setTimeout(() => {
-          if (mounted && loading) {
-            console.log('Yukleme timeout oldu, devam ediliyor');
-            setLoading(false);
-          }
-        }, MAX_LOADING_TIME);
+        const currentSession = data.session;
+        const currentUser = currentSession?.user ?? null;
 
-        // Get initial session
-        const { data: { session: initialSession }, error: sessionError } = await supabase.auth.getSession();
-
-        if (sessionError) {
-          console.log('Session hatasi:', sessionError.message);
-          if (mounted) {
-            setError('Oturum bilgileri alinamadi');
-            setLoading(false);
-          }
-          return;
-        }
-
-        if (mounted) {
-          setSession(initialSession);
-          setUser(initialSession?.user ?? null);
-
-          if (initialSession?.user) {
-            await fetchProfile(initialSession.user.id);
-          }
-          setLoading(false);
-        }
-      } catch (err) {
-        console.error('Auth initialization error:', err);
-        if (mounted) {
-          setError('Baglanti hatasi olustu');
-          setLoading(false);
-        }
+        setSession(currentSession);
+        setUser(currentUser);
+        await loadProfile(currentUser);
+      } finally {
+        clearTimeout(timeout);
+        if (mounted) setLoading(false);
       }
     };
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, newSession) => {
-      console.log('Auth state degisti:', event);
+    init();
 
-      if (!mounted) return;
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      async (_event, currentSession) => {
+        const currentUser = currentSession?.user ?? null;
 
-      setSession(newSession);
-      setUser(newSession?.user ?? null);
+        setSession(currentSession);
+        setUser(currentUser);
 
-      if (newSession?.user) {
-        await fetchProfile(newSession.user.id);
-      } else {
-        setProfile(null);
+        if (currentUser) {
+          await loadProfile(currentUser);
+        } else {
+          setProfile(null);
+        }
+
+        setLoading(false);
       }
-
-      setLoading(false);
-    });
-
-    initAuth();
+    );
 
     return () => {
       mounted = false;
-      clearTimeout(loadingTimeout);
-      subscription.unsubscribe();
+      listener.subscription.unsubscribe();
     };
-  }, [fetchProfile]);
+  }, []);
 
   const signIn = async (email: string, password: string) => {
-    setError(null);
-    setLoading(true);
+    const result = await supabase.auth.signInWithPassword({ email, password });
 
-    try {
-      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-
-      if (signInError) {
-        console.log('Giris hatasi:', signInError.message);
-        setLoading(false);
-        return { error: new Error(signInError.message) };
-      }
-
-      return { error: null };
-    } catch (err) {
-      setLoading(false);
-      return { error: new Error('Giris sirasinda hata olustu') };
+    if (!result.error) {
+      setSession(result.data.session);
+      setUser(result.data.user);
+      await loadProfile(result.data.user);
     }
+
+    return { error: result.error };
   };
 
-  const signUp = async (email: string, password: string, fullName: string) => {
-    setError(null);
-    setLoading(true);
+  const signUp = async (email: string, password: string, fullName?: string) => {
+    const result = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          full_name: fullName || email.split('@')[0],
+        },
+      },
+    });
 
-    try {
-      const { data, error: signUpError } = await supabase.auth.signUp({ email, password });
-
-      if (signUpError) {
-        console.log('Kayit hatasi:', signUpError.message);
-        setLoading(false);
-        return { error: new Error(signUpError.message) };
-      }
-
-      if (data.user) {
-        try {
-          await supabase.from('profiles').insert({
-            id: data.user.id,
-            full_name: fullName,
-          });
-        } catch (profileErr) {
-          console.log('Profil kaydedilemedi:', profileErr);
-        }
-      }
-
-      return { error: null };
-    } catch (err) {
-      setLoading(false);
-      return { error: new Error('Kayit sirasinda hata olustu') };
+    if (!result.error && result.data.user) {
+      await supabase.from('profiles').upsert({
+        id: result.data.user.id,
+        full_name: fullName || email.split('@')[0],
+      });
     }
+
+    return { error: result.error };
   };
 
   const signOut = async () => {
-    try {
-      await supabase.auth.signOut();
-    } catch (err) {
-      console.log('Cikis hatasi:', err);
-    }
+    setLoading(true);
+    await supabase.auth.signOut();
     setUser(null);
     setSession(null);
     setProfile(null);
+    setLoading(false);
+    window.location.href = '/login';
   };
 
   return (
-    <AuthContext.Provider value={{ user, session, profile, loading, error, signIn, signUp, signOut }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        session,
+        profile,
+        loading,
+        signIn,
+        signUp,
+        signOut,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );
@@ -186,6 +195,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (!context) throw new Error('useAuth must be used within an AuthProvider');
+
+  if (context === undefined) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+
   return context;
 }
