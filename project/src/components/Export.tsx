@@ -32,12 +32,18 @@ export default function Export() {
     }
   }, []);
 
-  useEffect(() => {
-    // Timeout to prevent infinite loading
-    const timeout = setTimeout(() => {
-      if (loading) {
-        console.log('Export yukleme timeout');
-        setLoading(false);
+ useEffect(() => {
+  const timeout = setTimeout(() => {
+    console.log('Export yukleme timeout');
+    setLoading(false);
+  }, 5000);
+
+  fetchKapaklar().finally(() => {
+    clearTimeout(timeout);
+  });
+
+  return () => clearTimeout(timeout);
+}, [fetchKapaklar]);
       }
     }, 5000);
 
