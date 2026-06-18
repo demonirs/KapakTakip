@@ -90,6 +90,15 @@ function FormField({
   );
 }
 
+function withTimeout<T>(promise: Promise<T>, ms = 8000): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error('İstek zaman aşımına uğradı. Supabase cevap vermedi.')), ms)
+    ),
+  ]);
+}
+
 export default function AddCase() {
   const { user, profile } = useAuth();
   const navigate = useNavigate();
@@ -110,22 +119,18 @@ export default function AddCase() {
     '';
 
   useEffect(() => {
-    const fetchCase = async (caseId: string) => {
+    const fetchCase = async () => {
+      if (!id) return;
+
       setFetchingCase(true);
       setError(null);
 
       try {
-        const { data, error: fetchError } = await supabase
-          .from('kapaklar')
-          .select('*')
-          .eq('id', caseId)
-          .maybeSingle();
+        const { data, error: fetchError } = await withTimeout(
+          supabase.from('kapaklar').select('*').eq('id', id).maybeSingle()
+        );
 
-        if (fetchError) {
-          console.error('VAKA YUKLEME HATASI:', fetchError);
-          setError(fetchError.message || 'Vaka yuklenirken hata olustu');
-          return;
-        }
+        if (fetchError) throw fetchError;
 
         if (data) {
           setFormData({
@@ -144,16 +149,14 @@ export default function AddCase() {
           });
         }
       } catch (err: any) {
-        console.error('VAKA YUKLEME CATCH:', err);
-        setError(err?.message || 'Vaka yuklenirken hata olustu');
+        console.error('VAKA YUKLEME HATASI:', err);
+        setError(err?.message || 'Vaka yüklenirken hata oluştu');
       } finally {
         setFetchingCase(false);
       }
     };
 
-    if (id) {
-      fetchCase(id);
-    }
+    fetchCase();
   }, [id]);
 
   const handleChange = (
@@ -183,20 +186,14 @@ export default function AddCase() {
         try {
           const base64 = reader.result as string;
 
-          const { data, error: ocrError } = await supabase.functions.invoke(
-            'ocr-form',
-            {
+          const { data, error: ocrError } = await withTimeout(
+            supabase.functions.invoke('ocr-form', {
               body: { image: base64 },
-            }
+            }),
+            12000
           );
 
-          if (ocrError) {
-            console.error('OCR HATASI:', ocrError);
-            setError(
-              'OCR servisi su an kullanilamiyor. Lutfen alanlari manuel doldurun.'
-            );
-            return;
-          }
+          if (ocrError) throw ocrError;
 
           if (data) {
             setFormData((prev) => ({
@@ -211,8 +208,8 @@ export default function AddCase() {
             }));
           }
         } catch (err: any) {
-          console.error('OCR CATCH:', err);
-          setError(err?.message || 'Fotoğraf okunurken hata olustu');
+          console.error('OCR HATASI:', err);
+          setError('OCR servisi şu an kullanılamıyor. Alanları manuel doldurun.');
         } finally {
           setOcrLoading(false);
         }
@@ -220,29 +217,28 @@ export default function AddCase() {
 
       reader.onerror = () => {
         setOcrLoading(false);
-        setError('Fotoğraf yuklenirken hata olustu');
+        setError('Fotoğraf yüklenirken hata oluştu');
       };
 
       reader.readAsDataURL(file);
     } catch (err: any) {
-      console.error('FOTO YUKLEME HATASI:', err);
-      setError(err?.message || 'Fotoğraf yuklenirken hata olustu');
+      console.error('FOTO HATASI:', err);
+      setError(err?.message || 'Fotoğraf yüklenirken hata oluştu');
       setOcrLoading(false);
     }
   };
 
   const validateForm = () => {
-    if (!user?.id) return 'Kullanici oturumu bulunamadi. Cikis yapip tekrar gir.';
-    if (!crimpYapan) return 'Crimp yapan kullanici adi bulunamadi.';
+    if (!user?.id) return 'Kullanıcı oturumu bulunamadı. Çıkış yapıp tekrar gir.';
+    if (!crimpYapan) return 'Crimp yapan kullanıcı adı bulunamadı.';
     if (!formData.vaka_tarihi) return 'Vaka tarihi zorunlu.';
     if (!formData.merkez_hastane) return 'Merkez hastane zorunlu.';
     if (!formData.doktor) return 'Doktor zorunlu.';
-    if (!formData.hasta_adi) return 'Hasta adi zorunlu.';
+    if (!formData.hasta_adi) return 'Hasta adı zorunlu.';
     if (!formData.kapak_tipi) return 'Kapak tipi zorunlu.';
     if (!formData.kapak_size) return 'Kapak size zorunlu.';
     if (!formData.lot_no) return 'Lot no zorunlu.';
     if (!formData.son_kul_tarihi) return 'Son kullanma tarihi zorunlu.';
-
     return null;
   };
 
@@ -280,37 +276,38 @@ export default function AddCase() {
 
     try {
       if (isEdit) {
-        const { error: updateError } = await supabase
-          .from('kapaklar')
-          .update(payload)
-          .eq('id', id);
+        const { error: updateError } = await withTimeout(
+          supabase.from('kapaklar').update(payload).eq('id', id)
+        );
 
-        if (updateError) {
-          console.error('UPDATE HATASI:', updateError);
-          throw updateError;
-        }
+        if (updateError) throw updateError;
       } else {
-        const { error: insertError } = await supabase.from('kapaklar').insert({
-          ...payload,
-          user_id: user!.id,
-        });
+        const { data, error: insertError } = await withTimeout(
+          supabase
+            .from('kapaklar')
+            .insert({
+              ...payload,
+              user_id: user!.id,
+            })
+            .select()
+            .single()
+        );
 
-        if (insertError) {
-          console.error('INSERT HATASI:', insertError);
-          throw insertError;
-        }
+        if (insertError) throw insertError;
+
+        console.log('KAYIT BASARILI:', data);
       }
 
       navigate('/list');
     } catch (err: any) {
-      console.error('KAYIT CATCH:', err);
+      console.error('KAYIT HATASI:', err);
 
       setError(
         err?.message ||
           err?.details ||
           err?.hint ||
           JSON.stringify(err) ||
-          'Kayit sirasinda bir hata olustu'
+          'Kayıt sırasında bir hata oluştu'
       );
     } finally {
       setLoading(false);
@@ -339,7 +336,7 @@ export default function AddCase() {
       <div className="bg-slate-800/40 border border-slate-700/50 rounded-2xl overflow-hidden">
         <div className="p-6 border-b border-slate-700/50 flex items-center justify-between">
           <h1 className="text-2xl font-bold text-white">
-            {isEdit ? 'Vakayi Duzenle' : 'Yeni Vaka Ekle'}
+            {isEdit ? 'Vakayı Düzenle' : 'Yeni Vaka Ekle'}
           </h1>
 
           {!isEdit && (
@@ -365,12 +362,12 @@ export default function AddCase() {
               {ocrLoading ? (
                 <>
                   <Loader2 className="w-5 h-5 animate-spin" />
-                  Fotograf Okunuyor...
+                  Fotoğraf Okunuyor...
                 </>
               ) : (
                 <>
                   <Camera className="w-5 h-5" />
-                  <span className="font-medium">Form Fotograf Yukle (OCR)</span>
+                  <span className="font-medium">Form Fotoğraf Yükle OCR</span>
                   <Upload className="w-4 h-4" />
                 </>
               )}
@@ -382,105 +379,37 @@ export default function AddCase() {
           <section>
             <SectionTitle title="Vaka Bilgileri" />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <FormField
-                label="Vaka Tarihi"
-                name="vaka_tarihi"
-                value={formData.vaka_tarihi}
-                onChange={handleChange}
-                type="date"
-              />
-              <FormField
-                label="Merkez Hastane"
-                name="merkez_hastane"
-                value={formData.merkez_hastane}
-                onChange={handleChange}
-              />
-              <FormField
-                label="Doktor"
-                name="doktor"
-                value={formData.doktor}
-                onChange={handleChange}
-              />
-              <FormField
-                label="Hasta Adı"
-                name="hasta_adi"
-                value={formData.hasta_adi}
-                onChange={handleChange}
-              />
+              <FormField label="Vaka Tarihi" name="vaka_tarihi" value={formData.vaka_tarihi} onChange={handleChange} type="date" />
+              <FormField label="Merkez Hastane" name="merkez_hastane" value={formData.merkez_hastane} onChange={handleChange} />
+              <FormField label="Doktor" name="doktor" value={formData.doktor} onChange={handleChange} />
+              <FormField label="Hasta Adı" name="hasta_adi" value={formData.hasta_adi} onChange={handleChange} />
             </div>
           </section>
 
           <section>
             <SectionTitle title="Kapak Bilgileri" />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <FormField
-                label="Kapak Tipi"
-                name="kapak_tipi"
-                value={formData.kapak_tipi}
-                onChange={handleChange}
-                options={KAPAK_TIPLERI}
-              />
-              <FormField
-                label="Kapak Size"
-                name="kapak_size"
-                value={formData.kapak_size}
-                onChange={handleChange}
-                options={KAPAK_SIZES}
-              />
-              <FormField
-                label="Lot No"
-                name="lot_no"
-                value={formData.lot_no}
-                onChange={handleChange}
-              />
-              <FormField
-                label="Son Kullanma Tarihi"
-                name="son_kul_tarihi"
-                value={formData.son_kul_tarihi}
-                onChange={handleChange}
-                type="date"
-              />
+              <FormField label="Kapak Tipi" name="kapak_tipi" value={formData.kapak_tipi} onChange={handleChange} options={KAPAK_TIPLERI} />
+              <FormField label="Kapak Size" name="kapak_size" value={formData.kapak_size} onChange={handleChange} options={KAPAK_SIZES} />
+              <FormField label="Lot No" name="lot_no" value={formData.lot_no} onChange={handleChange} />
+              <FormField label="Son Kullanma Tarihi" name="son_kul_tarihi" value={formData.son_kul_tarihi} onChange={handleChange} type="date" />
             </div>
           </section>
 
           <section>
-            <SectionTitle title="Islem Bilgileri" />
+            <SectionTitle title="İşlem Bilgileri" />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <FormField
-                label="Pre Balon"
-                name="pre_balon"
-                value={formData.pre_balon}
-                onChange={handleChange}
-                options={BALON_SIZES}
-              />
-              <FormField
-                label="Post Balon"
-                name="post_balon"
-                value={formData.post_balon}
-                onChange={handleChange}
-                options={BALON_SIZES}
-              />
-              <FormField
-                label="Paravalvüler AY"
-                name="paravalvuler_ay"
-                value={formData.paravalvuler_ay}
-                onChange={handleChange}
-                options={PARAVALVULER_OPTIONS}
-              />
-              <FormField
-                label="Proglide Adedi"
-                name="proglide_adedi"
-                value={formData.proglide_adedi}
-                onChange={handleChange}
-                options={PROGLIDE_OPTIONS}
-              />
+              <FormField label="Pre Balon" name="pre_balon" value={formData.pre_balon} onChange={handleChange} options={BALON_SIZES} />
+              <FormField label="Post Balon" name="post_balon" value={formData.post_balon} onChange={handleChange} options={BALON_SIZES} />
+              <FormField label="Paravalvüler AY" name="paravalvuler_ay" value={formData.paravalvuler_ay} onChange={handleChange} options={PARAVALVULER_OPTIONS} />
+              <FormField label="Proglide Adedi" name="proglide_adedi" value={formData.proglide_adedi} onChange={handleChange} options={PROGLIDE_OPTIONS} />
             </div>
 
             <div className="mt-4 p-4 bg-slate-700/30 rounded-xl border border-slate-600">
               <div className="flex items-center justify-between">
                 <span className="text-sm text-slate-400">Crimp Yapan</span>
                 <span className="text-white font-medium">
-                  {crimpYapan || 'Kullanici adi yok'}
+                  {crimpYapan || 'Kullanıcı adı yok'}
                 </span>
               </div>
             </div>
